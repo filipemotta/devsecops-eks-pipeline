@@ -1,0 +1,52 @@
+# Gate: kubectl debug (ephemeral containers) is the sanctioned break-glass path
+# into a hardened Pod — so it must obey the same rules as any other container.
+# The catch most policies miss: rules matching spec.containers do NOT see
+# spec.ephemeralContainers, so disallow-latest-tag and pod-security-baseline
+# have a side door until you add a rule for the ephemeral field itself.
+#
+# Verified on Kyverno 1.19 (2026-08-23) with a live kind cluster:
+#   * During admission of a kubectl-debug injection the container lands in
+#     request.object.spec.ephemeralContainers (NOT status) — that is the field
+#     the pattern below inspects.
+#   * Kyverno's webhook already registers pods/ephemeralcontainers when a policy
+#     targets Pods, so NO `subresources:` matcher is needed (and the classic
+#     ClusterPolicy schema rejects it). Matching Pod + UPDATE is enough.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: restrict-ephemeral-containers
+spec:
+  background: false
+  rules:
+    - name: ephemeral-must-be-non-root-and-tagged
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              operations:
+                - UPDATE
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kyverno
+                - falco
+      preconditions:
+        all:
+          - key: "{{ request.object.spec.ephemeralContainers[] | length(@) }}"
+            operator: GreaterThanOrEquals
+            value: 1
+      validate:
+        failureAction: Enforce
+        message: >-
+          Ephemeral (debug) containers must run non-root, forbid privilege
+          escalation, and use an explicit non-':latest' image tag.
+        foreach:
+          - list: "request.object.spec.ephemeralContainers"
+            pattern:
+              image: "!*:latest & *:*"
+              securityContext:
+                runAsNonRoot: true
+                allowPrivilegeEscalation: false

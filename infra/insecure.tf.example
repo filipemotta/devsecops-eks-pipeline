@@ -1,0 +1,22 @@
+# The SAME intent as the S3 bucket in main.tf, written the way a rushed copy
+# from a tutorial looks. Terraform accepts it and deploys it; `trivy config`
+# rejects it. Rename to insecure.tf and run `trivy config .` to watch the gate
+# fire — kept as .example so it does not clash with main.tf's bucket in a real
+# apply.
+#
+# What trivy config flags here (verified with trivy 0.74.0, 2026-08-23):
+#   - no public access block  -> bucket can be made public
+#   - no server-side encryption
+#   - no versioning
+resource "aws_s3_bucket" "logs" {
+  bucket = "payments-demo-logs-example"
+}
+
+# The classic mistake: an access block that blocks nothing.
+resource "aws_s3_bucket_public_access_block" "logs" {
+  bucket                  = aws_s3_bucket.logs.id
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}

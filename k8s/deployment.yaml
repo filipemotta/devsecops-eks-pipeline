@@ -1,0 +1,66 @@
+# The demo workload, written to PASS every gate: explicit tag, non-root,
+# no privilege escalation, read-only root fs, resources bounded.
+# Replace OWNER and the tag with your registry path / CI-built tag.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-demo
+  namespace: demo
+  labels:
+    app: payments-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: payments-demo
+  template:
+    metadata:
+      labels:
+        app: payments-demo
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: ghcr.io/OWNER/payments-demo:v0.1.0
+          ports:
+            - containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # readOnlyRootFilesystem breaks gunicorn, which needs a writable tmp
+          # dir (worker heartbeat) and a writable $HOME (control socket) —
+          # give it exactly that and nothing more.
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+      volumes:
+        - name: tmp
+          emptyDir: {}

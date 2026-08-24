@@ -1,0 +1,33 @@
+# Gate: every Pod outside system namespaces must pass the "baseline" Pod
+# Security Standards profile. Start with baseline in Enforce and move up to
+# restricted when workloads are ready — the opposite (restricted in Audit
+# forever) is exactly the theater this article is about.
+# NOTE (verified on Kyverno 1.19, 2026-08-23): the ClusterPolicy kind is
+# deprecated in favor of the CEL-based policy types (policies.kyverno.io).
+# It still works and remains the most widely deployed form; see
+# require-image-signature-ivpol.yaml for the modern equivalent pattern.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: pod-security-baseline
+spec:
+  background: true
+  rules:
+    - name: baseline
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kyverno
+                - falco
+      validate:
+        failureAction: Enforce
+        podSecurity:
+          level: baseline
+          version: latest

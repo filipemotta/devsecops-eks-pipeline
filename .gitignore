@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+infra/insecure.tf
+# Scan outputs
+*.json
+!k8s/external-secret.example.yaml
+sbom.cdx.json
+gitleaks.json
+# OS / editor
+.DS_Store
+*.swp

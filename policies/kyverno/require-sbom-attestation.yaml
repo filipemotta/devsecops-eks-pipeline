@@ -1,0 +1,39 @@
+# Gate: the image must not only be signed (require-image-signature) but also
+# carry a CycloneDX SBOM attestation signed by the same pipeline identity.
+# Signature proves "we built this"; the SBOM attestation proves "and here is
+# exactly what is inside it" — the provenance half of supply-chain trust.
+# The SBOM is produced by `trivy image --format cyclonedx` and attached with
+# `cosign attest --type cyclonedx` in ci/devsecops-pipeline.yaml.
+#
+# Verified on Kyverno 1.19 (2026-08-23): verifyImages supports an `attestations`
+# block with a predicate `type` and nested keyless attestors. CycloneDX from
+# cosign carries predicate type https://cyclonedx.org/bom.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-sbom-attestation
+spec:
+  webhookConfiguration:
+    timeoutSeconds: 30
+  rules:
+    - name: require-cyclonedx-sbom
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - demo
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/OWNER/payments-demo*"
+          failureAction: Enforce
+          attestations:
+            - type: https://cyclonedx.org/bom
+              attestors:
+                - entries:
+                    - keyless:
+                        subject: "https://github.com/OWNER/REPO/.github/workflows/*"
+                        issuer: "https://token.actions.githubusercontent.com"
+                        rekor:
+                          url: https://rekor.sigstore.dev

@@ -1,0 +1,31 @@
+# First line of defense for break-glass debugging: only named operators may
+# inject ephemeral containers at all. kubectl debug writes through the
+# pods/ephemeralcontainers subresource, so gating that subresource with RBAC
+# decides WHO can debug; the Kyverno policy decides WHAT the debug container
+# may be. Bind the role to a small SRE group, not to developers.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ephemeral-debug-operator
+rules:
+  - apiGroups: [""]
+    resources: ["pods/ephemeralcontainers"]
+    verbs: ["update"]
+  # kubectl debug also needs to read the target pod
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ephemeral-debug-operators
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ephemeral-debug-operator
+subjects:
+  # Replace with your real SRE group / users.
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: sre-oncall

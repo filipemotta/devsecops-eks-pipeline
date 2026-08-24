@@ -1,0 +1,27 @@
+# Shift-left, all the way to the keyboard: these run before a commit is created,
+# so the cheapest findings die on the developer's laptop, not in CI. CI still
+# runs the same checks — pre-commit is fast feedback, not a replacement for the
+# gate. Install once with: pip install pre-commit && pre-commit install
+repos:
+  # Secrets — the official gitleaks hook (same tool as CI gate 1).
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  # Trivy has no official pre-commit hook (only community ones); rather than pull
+  # a third-party repo into a security pipeline, call the local binary directly.
+  - repo: local
+    hooks:
+      - id: trivy-config
+        name: trivy config (IaC misconfig)
+        entry: trivy config --exit-code 1 --severity HIGH,CRITICAL infra/
+        language: system
+        files: \.tf$
+        pass_filenames: false
+      - id: terraform-fmt
+        name: terraform fmt
+        entry: terraform fmt -check -recursive infra/
+        language: system
+        files: \.tf$
+        pass_filenames: false

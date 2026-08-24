@@ -1,0 +1,166 @@
+# End-to-end DevSecOps pipeline: every stage below can BLOCK the build.
+# DefectDojo import runs at the end as the program's memory — it never blocks.
+# Place this file at .github/workflows/devsecops-pipeline.yaml in the app repo.
+#
+# Required repo secrets: DD_URL, DD_TOKEN (DefectDojo). GITHUB_TOKEN is built in.
+name: devsecops-pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}/payments-demo
+
+jobs:
+  secrets-scan:
+    name: "Gate 1 — secrets (gitleaks)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history: leaked-then-removed secrets still count
+      - name: Run gitleaks (fails on any leak)
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:latest \
+            git --redact --report-format json --report-path /repo/gitleaks.json /repo
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gitleaks-report
+          path: gitleaks.json
+
+  sast:
+    name: "Gate 2 — SAST (semgrep)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run semgrep (fails on findings)
+        run: |
+          pip install semgrep
+          semgrep scan --config p/owasp-top-ten --error --json --output semgrep.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-report
+          path: semgrep.json
+
+  sca-iac:
+    name: "Gate 3 — SCA + IaC + secrets (trivy fs)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin
+      - name: Scan filesystem (fails on HIGH/CRITICAL)
+        run: |
+          trivy fs --scanners vuln,secret,misconfig \
+            --exit-code 1 --severity HIGH,CRITICAL \
+            --format json --output trivy-fs.json .
+      - name: Scan IaC (trivy config = the Checkov role, fails on HIGH/CRITICAL)
+        run: |
+          trivy config --exit-code 1 --severity HIGH,CRITICAL \
+            --format json --output trivy-config.json infra/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-fs-report
+          path: |
+            trivy-fs.json
+            trivy-config.json
+
+  build-sign:
+    name: "Gates 4-5 — image scan + cosign signature"
+    runs-on: ubuntu-latest
+    needs: [secrets-scan, sast, sca-iac]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write   # keyless signing: the workflow identity IS the key
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin
+      - uses: sigstore/cosign-installer@v3
+      - name: Build image
+        run: docker build -t "$IMAGE:${{ github.sha }}" app/
+      - name: Scan image (fails on HIGH/CRITICAL)
+        run: |
+          trivy image --exit-code 1 --severity HIGH,CRITICAL \
+            --format json --output trivy-image.json "$IMAGE:${{ github.sha }}"
+      - name: Generate SBOM (CycloneDX)
+        run: |
+          trivy image --format cyclonedx --output sbom.cdx.json "$IMAGE:${{ github.sha }}"
+      - name: Push image (main only)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push "$IMAGE:${{ github.sha }}"
+      - name: Sign by digest, keyless (main only)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:${{ github.sha }}")
+          cosign sign --yes "$DIGEST"
+      - name: Attest the SBOM, keyless (main only)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:${{ github.sha }}")
+          # signature says "we built it"; the SBOM attestation says "and this is
+          # what is inside" — Kyverno's require-sbom-attestation verifies it.
+          cosign attest --yes --type cyclonedx --predicate sbom.cdx.json "$DIGEST"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: image-reports
+          path: |
+            trivy-image.json
+            sbom.cdx.json
+
+  terraform-apply:
+    name: "Infra — Terraform via OIDC (no static AWS keys)"
+    runs-on: ubuntu-latest
+    needs: [build-sign]
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write   # same OIDC token that signs the image, now for AWS
+    steps:
+      - uses: actions/checkout@v4
+      # No aws-access-key-id / aws-secret-access-key anywhere: the workflow's
+      # OIDC identity assumes an IAM role for ~15 min and the creds then expire.
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/payments-demo-ci
+          aws-region: us-east-1
+          role-session-name: gha-${{ github.run_id }}
+          role-duration-seconds: 900
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform apply
+        working-directory: infra
+        run: |
+          terraform init
+          terraform apply -auto-approve
+
+  defectdojo:
+    name: "Memory — import findings into DefectDojo (never blocks)"
+    runs-on: ubuntu-latest
+    needs: [build-sign]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: reports
+          merge-multiple: true
+      - name: Import reports
+        env:
+          DD_URL: ${{ secrets.DD_URL }}
+          DD_TOKEN: ${{ secrets.DD_TOKEN }}
+        run: ./defectdojo/import-findings.sh reports

@@ -1,0 +1,9 @@
+# Local cluster for the POC (admission + policies; Falco needs a Linux kernel
+# with eBPF — on kind/macOS it runs inside the Docker Desktop VM, on EKS it is native).
+#   kind create cluster --name devsecops --config kind-config.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: devsecops
+nodes:
+  - role: control-plane
+  - role: worker
