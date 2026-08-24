@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Standard static validation for a post's repositorio/ (ADR-0004).
-# Copied to repositorio/validar.sh by the repositorio-post skill; run it from
+# Copied to repositorio/validate.sh by the repositorio-post skill; run it from
 # the root of repositorio/. It detects which artifact types are present and runs
 # the right validator for each. Output serves as evidence for TESTES.md.
 # Exits non-zero if any validation fails.
@@ -12,7 +12,7 @@ ok()    { echo "  [ok] $1"; }
 skip()  { echo "  [skipped] $1 (missing tool: install with 'brew install $2')"; }
 run()   { local desc="$1"; shift; if "$@" >/dev/null 2>&1; then ok "$desc"; else fail "$desc"; fi; }
 
-echo "== validar.sh — $(date '+%Y-%m-%d %H:%M') =="
+echo "== validate.sh — $(date '+%Y-%m-%d %H:%M') =="
 
 # --- Shell scripts ---
 while IFS= read -r s; do
